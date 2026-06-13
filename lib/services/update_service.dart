@@ -37,7 +37,7 @@ class AppVersion {
 }
 
 class UpdateService {
-  static const String _repoOwner = 'flox-app';
+  static const String _repoOwner = 'QuopTron';
   static const String _repoName = 'futbolgo';
   static const String _currentVersion = '1.0.0';
   static const String _updateCheckKey = 'last_update_check';
