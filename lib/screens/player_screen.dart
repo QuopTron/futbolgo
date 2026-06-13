@@ -52,13 +52,19 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   // Reconnection
   int _reconnectAttempts = 0;
-  static const int _maxReconnectAttempts = 3;
+  static const int _maxReconnectAttempts = 5;
   Timer? _reconnectTimer;
   Timer? _bufferingTimer;
   bool _isReconnecting = false;
 
   // Live stream indicator (all streams are live)
   bool _isLiveStream = true;
+
+  // Stream health monitoring
+  DateTime? _lastSuccessfulPlay;
+  Timer? _healthCheckTimer;
+  Timer? _audioSilenceTimer;
+  bool _hasPlayedSuccessfully = false;
 
   // Quality selector
   String _currentQuality = 'Auto';
@@ -403,17 +409,32 @@ class _PlayerScreenState extends State<PlayerScreen>
       player.stream.error.listen((error) {
         if (!mounted) return;
         _logDebug('❌ Error media_kit: $error');
-        setState(() {
-          _errorMessage = 'Error al reproducir: $error';
-          _isLoading = false;
-        });
-        _tryAutoReconnect();
+        final errorStr = error.toString().toLowerCase();
+        
+        if (errorStr.contains('url') || errorStr.contains('404') || errorStr.contains('not found') || 
+            errorStr.contains('network') || errorStr.contains('connection')) {
+          _logDebug('🔄 Error de URL/redetectado, reintentando...');
+          setState(() {
+            _errorMessage = 'El stream se ha actualizado, reconectando...';
+            _isLoading = true;
+          });
+          _reconnectAttempts = 0;
+          _tryAutoReconnect();
+        } else {
+          setState(() {
+            _errorMessage = 'Error al reproducir: $error';
+            _isLoading = false;
+          });
+          _tryAutoReconnect();
+        }
       });
 
       player.stream.completed.listen((_) {
         if (!mounted) return;
         _logDebug('⏹️ Stream finalizado (completed)');
-        if (_isPlaying) {
+        if (_hasPlayedSuccessfully && _isPlaying) {
+          _logDebug('🔄 Stream finalizó inesperadamente, reconectando...');
+          _reconnectAttempts = 0;
           _tryAutoReconnect();
         }
       });
@@ -425,6 +446,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           _logDebug('⏳ Buffering...');
         } else {
           _logDebug('✅ Buffering terminado');
+          _lastSuccessfulPlay = DateTime.now();
         }
         if (buffering && _mediaPlayer != null) {
           _bufferingTimer = Timer(const Duration(seconds: 10), () {
@@ -442,20 +464,40 @@ class _PlayerScreenState extends State<PlayerScreen>
           if (playing) {
             _logDebug('▶️ Reproduciendo (${_formatElapsed(_loadStartTime)})');
             setState(() => _isLoading = false);
+            _hasPlayedSuccessfully = true;
+            _lastSuccessfulPlay = DateTime.now();
             _showControlsTemporarily();
+            
+            _audioSilenceTimer?.cancel();
+            _healthCheckTimer?.cancel();
+            _startHealthMonitoring();
+            
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _ensureVolume();
+            });
+          } else {
+            _healthCheckTimer?.cancel();
+            _audioSilenceTimer?.cancel();
           }
         }
       });
 
-      player.stream.position.listen((_) {
+      player.stream.position.listen((position) {
         if (mounted && _isLoading) {
           setState(() => _isLoading = false);
+        }
+        if (mounted && _isPlaying) {
+          _lastSuccessfulPlay = DateTime.now();
         }
       });
 
       await player.open(Media(_currentStreamUrl));
 
       _isChangingQuality = false;
+
+      _lastSuccessfulPlay = DateTime.now();
+      _hasPlayedSuccessfully = false;
+      _startHealthMonitoring();
 
       _loadingTimer?.cancel();
       _loadingTimer = Timer(const Duration(seconds: 20), () {
@@ -481,13 +523,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _tryAutoReconnect() {
-    // If reconnection attempts exhausted, try fallback URLs
-    if (_reconnectAttempts >= _maxReconnectAttempts) {
-      _logDebug('❌ Reconexión: máximo alcanzado');
-      _tryFallbackStream();
-      return;
-    }
-
     if (_isReconnecting) return;
 
     _reconnectAttempts++;
@@ -503,7 +538,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     _loadStartTime = DateTime.now();
 
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(Duration(seconds: _reconnectAttempts * 3), () {
+    
+    final delay = _reconnectAttempts < 2 
+        ? Duration(seconds: 2) 
+        : Duration(seconds: _reconnectAttempts * 2);
+    
+    _reconnectTimer = Timer(delay, () {
       if (!mounted) return;
       _isReconnecting = false;
       if (_isMediaStream) {
@@ -522,6 +562,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         });
       }
     });
+
+    if (_reconnectAttempts >= _maxReconnectAttempts) {
+      _logDebug('⚠️máximo de reconexiones alcanzado, intentando fallback...');
+      Timer(const Duration(milliseconds: 500), () => _tryFallbackStream());
+    }
   }
 
   void _tryFallbackStream() {
@@ -559,6 +604,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     _loadingTimer?.cancel();
     _reconnectTimer?.cancel();
     _bufferingTimer?.cancel();
+    _healthCheckTimer?.cancel();
+    _audioSilenceTimer?.cancel();
     _debugScrollController.dispose();
     _disposePlayer();
     _exitFullscreen();
@@ -566,10 +613,97 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _disposePlayer() {
+    _healthCheckTimer?.cancel();
+    _audioSilenceTimer?.cancel();
     _mediaPlayer?.dispose();
     _mediaPlayer = null;
     _videoController = null;
     _webViewController = null;
+  }
+
+  void _startHealthMonitoring() {
+    _healthCheckTimer?.cancel();
+    _audioSilenceTimer?.cancel();
+
+    _healthCheckTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (!mounted || !_isPlaying || _isReconnecting) return;
+
+      final now = DateTime.now();
+      final timeSinceLastPlay = _lastSuccessfulPlay != null
+          ? now.difference(_lastSuccessfulPlay!).inSeconds
+          : 0;
+
+      if (_hasPlayedSuccessfully && timeSinceLastPlay > 20) {
+        _logDebug('⚠️ Stream stale: No updates >20s, reconectando...');
+        setState(() {
+          _errorMessage = 'Reconectando stream...';
+          _isLoading = true;
+        });
+        _tryAutoReconnect();
+      }
+    });
+
+    _audioSilenceTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted || !_isPlaying || _isReconnecting) return;
+      
+      _ensureVolume();
+      _checkStreamHealth();
+    });
+  }
+
+  Future<void> _ensureVolume() async {
+    if (_mediaPlayer == null) return;
+    
+    try {
+      final volumeSubscription = _mediaPlayer!.stream.volume.listen((volume) {
+        if (volume == 0 && mounted) {
+          _logDebug('🔊 Audio silenciado por stream, reactivando...');
+          _mediaPlayer!.setVolume(1.0);
+        }
+      });
+      
+      volumeSubscription.cancel();
+    } catch (e) {
+      _logDebug('Error checking volume: $e');
+    }
+  }
+
+  Future<void> _checkStreamHealth() async {
+    if (_mediaPlayer == null || _isReconnecting) return;
+    
+    try {
+      Duration? duration;
+      Duration? position;
+      bool? playing;
+
+      final durationSub = _mediaPlayer!.stream.duration.listen((d) {
+        duration = d;
+      });
+      final positionSub = _mediaPlayer!.stream.position.listen((p) {
+        position = p;
+      });
+      final playingSub = _mediaPlayer!.stream.playing.listen((p) {
+        playing = p;
+      });
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      durationSub.cancel();
+      positionSub.cancel();
+      playingSub.cancel();
+
+      if (playing == true && position != null && duration != null) {
+        if (position! > Duration.zero && duration! > Duration.zero) {
+          if (position!.inSeconds >= duration!.inSeconds - 5 && _isLiveStream) {
+            _logDebug('⚠️ Stream parece estar en loop, reconectando...');
+            _reconnectAttempts = 0;
+            _tryAutoReconnect();
+          }
+        }
+      }
+    } catch (e) {
+      _logDebug('Stream health check error: $e');
+    }
   }
 
   @override
