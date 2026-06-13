@@ -40,7 +40,16 @@ class UpdateDialog extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
             Header(),
-            const SizedBox(height: 20),
+            const SizedBox(height: 8),
+            const Text(
+              '¡Hola! Nueva versión disponible',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.blue,
+              ),
+            ),
+            const SizedBox(height: 12),
             Content(releaseNotes: releaseNotes, update: update),
             const SizedBox(height: 24),
               Actions(onUpdate: onUpdate, onDismiss: onDismiss),

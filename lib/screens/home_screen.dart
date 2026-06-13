@@ -351,49 +351,6 @@ class _HomeScreenState extends State<HomeScreen>
                 ],
               ),
         actions: [
-          // Update button
-          GlassContainer(
-            borderRadius: 20,
-            blur: 6,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            margin: EdgeInsets.zero,
-            backgroundColor: _pendingUpdate != null
-                ? Colors.blue.withValues(alpha: 0.2)
-                : Colors.white.withValues(alpha: 0.04),
-            borderColor: _pendingUpdate != null
-                ? Colors.blue.withValues(alpha: 0.3)
-                : Colors.white.withValues(alpha: 0.1),
-            onTap: () => _checkForAppUpdates(),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  _updateChecking
-                      ? Icons.hourglass_empty_rounded
-                      : _pendingUpdate != null
-                          ? Icons.new_releases_rounded
-                          : Icons.system_update_alt_rounded,
-                  size: 16,
-                  color: _pendingUpdate != null
-                      ? Colors.blue
-                      : Colors.grey[400],
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  'Actualizar',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.5,
-                    color: _pendingUpdate != null
-                        ? Colors.blue
-                        : Colors.grey[400],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 4),
           // Auto refresh toggle
           Padding(
             padding: const EdgeInsets.only(right: 4),
